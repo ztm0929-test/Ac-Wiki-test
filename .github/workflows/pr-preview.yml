@@ -14,6 +14,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0  # 获取完整Git历史
           
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -26,13 +27,17 @@ jobs:
           pip install -r requirements.txt
           
       - name: Build the project
-        run: mkdocs build --site-dir site
+        run: |
+          # 设置Git用户信息以避免RSS插件错误
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          mkdocs build --site-dir site
+        env:
+          # 禁用RSS插件的CI警告
+          MKDOCS_RSS_PLUGIN_CI_MODE: "true"
 
       - name: Deploy PR Preview to gh-pages
         run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          
           # 检查gh-pages分支是否存在
           if ! git ls-remote --heads origin gh-pages | grep -q gh-pages; then
             echo "gh-pages branch does not exist, creating it..."
