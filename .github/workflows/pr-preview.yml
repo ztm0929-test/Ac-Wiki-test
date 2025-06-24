@@ -6,36 +6,97 @@ on:
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout PR code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: 3.x
+          
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+          
       - name: Build the project
         run: mkdocs build --site-dir site
 
       - name: Deploy PR Preview to gh-pages
         run: |
-          git config --global user.name github-actions[bot]
-          git config --global user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          
+          # 检查gh-pages分支是否存在
+          if ! git ls-remote --heads origin gh-pages | grep -q gh-pages; then
+            echo "gh-pages branch does not exist, creating it..."
+            git checkout --orphan gh-pages
+            git rm -rf .
+            echo "# GitHub Pages" > README.md
+            git add README.md
+            git commit -m "Initial gh-pages commit"
+            git push origin gh-pages
+            git checkout -
+          fi
+          
+          # 切换到gh-pages分支
           git fetch origin gh-pages
           git checkout gh-pages
+          
+          # 创建PR预览目录
           mkdir -p pr-preview/pr-${{ github.event.pull_request.number }}
           rm -rf pr-preview/pr-${{ github.event.pull_request.number }}/*
           cp -r site/* pr-preview/pr-${{ github.event.pull_request.number }}/
+          
+          # 提交更改
           git add pr-preview/pr-${{ github.event.pull_request.number }}
-          git commit -m "PR #${{ github.event.pull_request.number }} preview" || echo "No changes to commit"
-          git push origin gh-pages
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "PR #${{ github.event.pull_request.number }} preview"
+            git push origin gh-pages
+          fi
 
       - name: Comment PR Preview URL
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          COMMENT="🚀 PR 预览已部署：[点击查看](https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/pr-preview/pr-${{ github.event.pull_request.number }}/)"
-          PR_API_URL="${{ github.event.pull_request.comments_url }}"
-          curl -s -H "Authorization: token $GITHUB_TOKEN" -X POST -d "{\"body\": \"$COMMENT\"}" $PR_API_URL
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const comment = `🚀 PR 预览已部署：[点击查看](https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/pr-preview/pr-${{ github.event.pull_request.number }}/)
+            
+            📝 预览将在PR关闭后自动清理`;
+            
+            // 检查是否已有预览评论
+            const comments = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            
+            const existingComment = comments.data.find(comment => 
+              comment.user.login === 'github-actions[bot]' && 
+              comment.body.includes('PR 预览已部署')
+            );
+            
+            if (existingComment) {
+              // 更新现有评论
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existingComment.id,
+                body: comment
+              });
+            } else {
+              // 创建新评论
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: comment
+              });
+            }
